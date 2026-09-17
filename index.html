@@ -1,0 +1,1177 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AR Catch & Assemble - Science Game</title>
+    
+    <!-- Tailwind CSS for modern styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- MediaPipe Face Mesh & Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    
+    <!-- Tone.js for BGM & SFX -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+
+    <!-- Google Font: Kanit -->
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Kanit', sans-serif;
+            background-color: #030712;
+            color: #f3f4f6;
+            margin: 0;
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #video-element {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            transform: scaleX(-1);
+            z-index: 0;
+        }
+
+        #game-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            z-index: 1;
+            pointer-events: auto;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(56, 189, 248, 0.25);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+        }
+
+        .glass-card {
+            background: rgba(30, 41, 59, 0.85);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5);
+        }
+
+        @keyframes floatAnimation {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-8px); }
+        }
+        .animate-float {
+            animation: floatAnimation 3s ease-in-out infinite;
+        }
+
+        @keyframes assemblePulse {
+            0% { transform: scale(0.6); opacity: 0; filter: blur(10px); }
+            50% { transform: scale(1.15); opacity: 1; filter: drop-shadow(0 0 35px #38bdf8); }
+            100% { transform: scale(1); opacity: 1; filter: drop-shadow(0 0 20px #c084fc); }
+        }
+        .animate-assemble {
+            animation: assemblePulse 1.2s forwards cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .loader {
+            border: 4px solid rgba(56, 189, 248, 0.2);
+            border-left-color: #38bdf8;
+            border-top-color: #c084fc;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <video id="video-element" autoplay playsinline muted></video>
+    <canvas id="game-canvas"></canvas>
+
+    <div id="ui-layer" class="flex flex-col justify-between">
+        
+        <!-- Sound Toggle -->
+        <button id="btn-sound-toggle" class="absolute top-4 right-4 z-50 glass-panel px-3 py-2 rounded-full text-xl text-white hover:bg-white/25 transition-colors pointer-events-auto shadow-[0_0_10px_rgba(56,189,248,0.5)]">
+            🔊
+        </button>
+
+        <!-- HUD -->
+        <div id="hud" class="hidden w-full p-4 flex justify-between items-start pointer-events-auto">
+            <div class="glass-panel rounded-2xl p-3 flex items-center gap-3 w-48 sm:w-64">
+                <div id="hud-level-icon" class="text-3xl bg-sky-500/20 p-2 rounded-xl border border-sky-500/50 flex items-center justify-center">📱</div>
+                <div class="flex flex-col">
+                    <span class="text-xs text-sky-400 uppercase font-bold tracking-wider">ด่านที่ <span id="hud-level-num">1</span></span>
+                    <span id="hud-goal-text" class="text-white font-semibold text-sm sm:text-base leading-tight">ประกอบสมาร์ทโฟน</span>
+                </div>
+            </div>
+
+            <div class="glass-panel rounded-full px-6 py-2 flex flex-col items-center min-w-[150px] relative">
+                <div id="hud-timer" class="absolute -bottom-10 bg-red-500/90 text-white font-bold px-4 py-1 rounded-full text-lg border border-red-300 shadow-[0_0_10px_rgba(239,68,68,0.8)] transition-colors duration-300 z-20">
+                    ⏱️ 50s
+                </div>
+                <span class="text-white/70 text-xs mb-1">เก็บชิ้นส่วน</span>
+                <div class="flex flex-wrap justify-center gap-1 max-w-[120px] sm:max-w-[200px]" id="hud-progress-dots"></div>
+            </div>
+
+            <div class="glass-panel rounded-2xl p-3 flex flex-col gap-2 min-w-[120px] text-right">
+                <div class="flex justify-between items-center gap-4">
+                    <span class="text-white/70 text-xs">SCORE</span>
+                    <span id="hud-score" class="text-white font-bold text-xl text-sky-400">0</span>
+                </div>
+                <div class="flex justify-between items-center gap-4">
+                    <span class="text-white/70 text-xs">COMBO</span>
+                    <span id="hud-combo" class="text-purple-400 font-bold">x1</span>
+                </div>
+                <div class="flex justify-end gap-1 mt-1" id="hud-lives">❤️ ❤️ ❤️</div>
+            </div>
+        </div>
+
+        <!-- FPS Counter -->
+        <div id="fps-counter" class="absolute bottom-4 right-4 glass-panel px-3 py-1 rounded-lg text-xs text-sky-400 font-mono hidden pointer-events-auto">
+            FPS: <span>0</span>
+        </div>
+
+        <!-- Loading Screen -->
+        <div id="loading-screen" class="absolute inset-0 flex flex-col items-center justify-center bg-gray-950/95 backdrop-blur-md z-50 pointer-events-auto">
+            <div class="loader mb-4"></div>
+            <h2 class="text-2xl text-white font-bold mb-2">กำลังเตรียมระบบ AR...</h2>
+            <p class="text-sky-400/80 text-sm">กรุณาอนุญาตการเข้าถึงกล้องเพื่อเริ่มต้นใช้งาน</p>
+        </div>
+
+        <!-- Start Screen -->
+        <div id="start-screen" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-gray-950/90 backdrop-blur-md z-40 pointer-events-auto">
+            <div class="glass-card rounded-3xl p-8 max-w-lg w-[90%] text-center animate-float">
+                <div class="text-7xl mb-3 animate-pulse">🧪✨</div>
+                <h1 class="text-3xl sm:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 via-purple-300 to-purple-500 mb-2">AR Catch & Assemble</h1>
+                <h2 class="text-lg text-sky-300 mb-6 font-semibold">เกมวิทยาศาสตร์ประกอบร่างอัจฉริยะ</h2>
+                
+                <div class="bg-black/40 rounded-2xl p-5 mb-8 text-left text-white/90 text-sm sm:text-base border border-sky-500/20 shadow-inner">
+                    <p class="mb-3 text-sky-400 font-bold flex items-center gap-2"><span>🎯</span> ภารกิจของคุณ:</p>
+                    <ul class="list-disc pl-5 space-y-2 text-white/85">
+                        <li>ขยับหน้าเพื่อเลื่อนเป้าวงกลมเล็ง</li>
+                        <li><span class="text-green-400 font-bold">"อ้าปาก"</span> หรือคลิกหน้าจอเพื่อรับชิ้นส่วนที่ถูกต้อง</li>
+                        <li>รวบรวมชิ้นส่วนเพื่อประกอบเป็นวัตถุในแต่ละด่าน!</li>
+                        <li>ระวัง! หลีกเลี่ยงขยะหรือชิ้นส่วนสิ่งของที่ไม่เกี่ยวข้อง</li>
+                    </ul>
+                </div>
+
+                <button id="btn-start" class="w-full py-4 rounded-2xl bg-gradient-to-r from-sky-500 via-blue-600 to-purple-600 text-white font-bold text-xl shadow-[0_0_25px_rgba(56,189,248,0.6)] hover:shadow-[0_0_35px_rgba(192,132,252,0.8)] transition-all transform hover:scale-[1.02] active:scale-95 border border-white/25 cursor-pointer">
+                    🚀 เริ่มเล่นเกมสนุกๆ
+                </button>
+            </div>
+        </div>
+
+        <!-- Assemble / Knowledge Screen -->
+        <div id="assemble-screen" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-gray-950/95 backdrop-blur-lg z-40 pointer-events-auto">
+            <div class="glass-card rounded-3xl p-8 text-center max-w-2xl w-[92%] border border-sky-500/40 shadow-[0_0_50px_rgba(56,189,248,0.3)]">
+                <span class="text-xs uppercase tracking-widest text-sky-400 font-bold px-3 py-1 rounded-full bg-sky-500/10 border border-sky-500/30">ยอดเยี่ยมมาก!</span>
+                <h2 class="text-3xl sm:text-4xl text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-purple-400 font-extrabold my-3">ประกอบร่างสำเร็จ!</h2>
+                <div id="assembled-object-icon" class="text-8xl sm:text-9xl my-4 animate-assemble flex justify-center items-center">📱</div>
+                <p id="assembled-object-name" class="text-2xl text-white font-bold mb-6 tracking-wide">สมาร์ทโฟน</p>
+                
+                <div class="bg-blue-950/60 border border-sky-500/40 rounded-2xl p-5 mb-8 text-left shadow-lg">
+                    <h3 class="text-sky-400 font-bold mb-2 flex items-center gap-2 text-lg">
+                        <span class="text-2xl animate-bounce">💡</span> เกร็ดวิทยาน่ารู้
+                    </h3>
+                    <p id="assembled-fact-text" class="text-white/95 text-sm sm:text-base leading-relaxed font-light">
+                        เนื้อหาสาระความรู้...
+                    </p>
+                </div>
+
+                <button id="btn-next-level" class="px-10 py-4 rounded-2xl bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold text-lg hover:shadow-[0_0_25px_rgba(192,132,252,0.8)] transition-all transform hover:scale-105 active:scale-95 border border-white/20 cursor-pointer">
+                    ไปด่านต่อไป 🚀
+                </button>
+            </div>
+        </div>
+
+        <!-- End / Score Screen -->
+        <div id="end-screen" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-gray-950/95 backdrop-blur-xl z-50 pointer-events-auto">
+            <div class="glass-card rounded-3xl p-8 max-w-md w-[90%] text-center border border-white/20 shadow-[0_0_60px_rgba(0,0,0,0.8)]">
+                <div id="end-icon" class="text-7xl mb-3 animate-float">🎉</div>
+                <h1 id="end-title" class="text-3xl font-extrabold text-white mb-2">ยินดีด้วย!</h1>
+                <p id="end-subtitle" class="text-sky-300 mb-6 font-medium">คุณเรียนรู้การประกอบวัตถุสำเร็จ</p>
+                
+                <div class="grid grid-cols-2 gap-4 mb-8">
+                    <div class="bg-black/40 rounded-2xl p-4 border border-white/10 shadow-inner">
+                        <div class="text-white/60 text-xs mb-1 font-semibold uppercase">คะแนนรวม</div>
+                        <div id="end-score" class="text-3xl font-extrabold text-sky-400">0</div>
+                    </div>
+                    <div class="bg-black/40 rounded-2xl p-4 border border-white/10 shadow-inner">
+                        <div class="text-white/60 text-xs mb-1 font-semibold uppercase">ระดับขั้น</div>
+                        <div id="end-rank" class="text-3xl font-extrabold text-yellow-400">S</div>
+                    </div>
+                </div>
+
+                <button id="btn-restart" class="w-full py-4 rounded-2xl bg-gradient-to-r from-white to-gray-200 text-gray-950 font-extrabold text-lg hover:bg-white shadow-[0_0_20px_rgba(255,255,255,0.4)] transition-all transform hover:scale-[1.02] active:scale-95 cursor-pointer">
+                    🔄 เล่นอีกครั้ง
+                </button>
+            </div>
+        </div>
+
+        <!-- Floating Feedback Text -->
+        <div id="feedback-text" class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-4xl font-black text-white pointer-events-none opacity-0 transition-opacity duration-300 z-30">
+            Perfect!
+        </div>
+
+    </div>
+
+    <script>
+        const levels = [
+            {
+                id: 1,
+                name: "ด่าน 1: ประกอบสมาร์ทโฟน",
+                objectiveIcon: "https://lh3.googleusercontent.com/d/1nRh1xLrdA9JHDC_QK8kQnmkqTVirphyq",
+                objectiveName: "สมาร์ทโฟน",
+                requiredParts: 6,
+                targetIcon: "https://lh3.googleusercontent.com/d/1mA4s8zDrRyJQQq8jpomX5ki2Hk2Jh6Sb",
+                targetParts: [
+                    { name: 'แบตเตอรี่', url: 'https://lh3.googleusercontent.com/d/1mA4s8zDrRyJQQq8jpomX5ki2Hk2Jh6Sb' },
+                    { name: 'กล้อง', url: 'https://lh3.googleusercontent.com/d/1lYUpv-QRQPtDgvMuc88KWwI9HC1gAswk' },
+                    { name: 'น็อต', url: 'https://lh3.googleusercontent.com/d/1JlXoMjy_YNVa6R8e_8-PZ8PWea6UmttX' },
+                    { name: 'สายไฟ', url: 'https://lh3.googleusercontent.com/d/1PmmS5CWkvTHwfI3eH82R3a6RBNFcl14s' },
+                    { name: 'หน้าจอ', url: 'https://lh3.googleusercontent.com/d/1kKL612AQ0zcoyq21HVGR6MWT-Rx-baMk' },
+                    { name: 'ชิป', url: 'https://lh3.googleusercontent.com/d/1HlITz5elWB2eZsQ2SGB7fhK0F3tpJHVj' }
+                ],
+                dropSpeedBase: 2.2,
+                dropInterval: 1200,
+                distractors: [
+                    { name: 'ของเล่น', url: 'https://lh3.googleusercontent.com/d/1kf6kSqsZGInCxltYxsnRUYHHzs5gzyHZ' },
+                    { name: 'รองเท้าผ้าใบ', url: 'https://lh3.googleusercontent.com/d/1iPqvG76I52T6TVHUY53zIjvDU7Pg-6j8' },
+                    { name: 'หิน', url: 'https://lh3.googleusercontent.com/d/1C3cARKFCGFWPdwwCFSR1wR7ytEw5EzKD' },
+                    { name: 'ของเล่น', url: 'https://lh3.googleusercontent.com/d/1kf6kSqsZGInCxltYxsnRUYHHzs5gzyHZ' },
+                    { name: 'รองเท้าผ้าใบ', url: 'https://lh3.googleusercontent.com/d/1iPqvG76I52T6TVHUY53zIjvDU7Pg-6j8' },
+                    { name: 'หิน', url: 'https://lh3.googleusercontent.com/d/1C3cARKFCGFWPdwwCFSR1wR7ytEw5EzKD' },
+                    { name: 'ของเล่น', url: 'https://lh3.googleusercontent.com/d/1kf6kSqsZGInCxltYxsnRUYHHzs5gzyHZ' },
+                    { name: 'รองเท้าผ้าใบ', url: 'https://lh3.googleusercontent.com/d/1iPqvG76I52T6TVHUY53zIjvDU7Pg-6j8' },
+                    { name: 'หิน', url: 'https://lh3.googleusercontent.com/d/1C3cARKFCGFWPdwwCFSR1wR7ytEw5EzKD' },
+                    { name: 'ของเล่น', url: 'https://lh3.googleusercontent.com/d/1kf6kSqsZGInCxltYxsnRUYHHzs5gzyHZ' },
+                    { name: 'รองเท้าผ้าใบ', url: 'https://lh3.googleusercontent.com/d/1iPqvG76I52T6TVHUY53zIjvDU7Pg-6j8' },
+                    { name: 'หิน', url: 'https://lh3.googleusercontent.com/d/1C3cARKFCGFWPdwwCFSR1wR7ytEw5EzKD' }
+                ],
+                fact: "สมาร์ทโฟนหนึ่งเครื่องเกิดจากการประกอบกันของชิ้นส่วนย่อยๆ เช่น หน้าจอ แบตเตอรี่ และแผงวงจรขนาดเล็ก หากแยกชิ้นส่วนเหล่านี้ออกจากกัน มันก็จะไม่สามารถทำงานเป็นโทรศัพท์ได้"
+            },
+            {
+                id: 2,
+                name: "ด่าน 2: เครื่องประดับกำไล",
+                objectiveIcon: "https://lh3.googleusercontent.com/d/10knYwNkFchSZWjLK7kDP5Nm4_lpmDmFo",
+                objectiveName: "กำไลข้อมือ",
+                requiredParts: 6,
+                targetIcon: "https://lh3.googleusercontent.com/d/1aQ6SsKAZh0P5zNe6BXUS-jYxMZ-2kTxN",
+                targetName: "ลูกปัดและอัญมณี",
+                targetParts: [
+                    { name: 'ลูกปัดขาว', url: 'https://lh3.googleusercontent.com/d/1swLdxC4hbtOrYJKM-cYpdveco6iVNMTK' },
+                    { name: 'ลูกปัดแดง', url: 'https://lh3.googleusercontent.com/d/1NJkqQXpHtWIK2P1pqcaiiTjIcXAO1dtB' },
+                    { name: 'ลูกปัดน้ำเงิน', url: 'https://lh3.googleusercontent.com/d/1ykhSwTBT3USLIm0OpyMHqem3j1ql2NBj' },
+                    { name: 'ลูกปัดเหลือง', url: 'https://lh3.googleusercontent.com/d/1OKAUPly_nCPx0c5kb_PlliTLiQbHABRs' },
+                    { name: 'อัญมณี', url: 'https://lh3.googleusercontent.com/d/1aQ6SsKAZh0P5zNe6BXUS-jYxMZ-2kTxN' },
+                    { name: 'ลูกปัดขาว', url: 'https://lh3.googleusercontent.com/d/1swLdxC4hbtOrYJKM-cYpdveco6iVNMTK' }
+                ],
+                dropSpeedBase: 2.8,
+                dropInterval: 1050,
+                distractors: [
+                    { name: 'ไหมพรม', url: 'https://lh3.googleusercontent.com/d/1DB5s5Yb-dIZkQjWsNkyhzTFfdbr2tvqZ' },
+                    { name: 'ลูกบอล', url: 'https://lh3.googleusercontent.com/d/1AdMvBtC0qxKBxsyuj9uo94APa7CWgKcq' },
+                    { name: 'เหรียญ', url: 'https://lh3.googleusercontent.com/d/16G8TP6p9y_bYAtal_3if5e77GzDrbHFg' },
+                    { name: 'ท่อนไม้', url: 'https://lh3.googleusercontent.com/d/14ZIIXuUdQgNJFraWEuSKYuK0Zpjqxv7Q' },
+                    { name: 'ไหมพรม', url: 'https://lh3.googleusercontent.com/d/1DB5s5Yb-dIZkQjWsNkyhzTFfdbr2tvqZ' },
+                    { name: 'ลูกบอล', url: 'https://lh3.googleusercontent.com/d/1AdMvBtC0qxKBxsyuj9uo94APa7CWgKcq' },
+                    { name: 'เหรียญ', url: 'https://lh3.googleusercontent.com/d/16G8TP6p9y_bYAtal_3if5e77GzDrbHFg' },
+                    { name: 'ท่อนไม้', url: 'https://lh3.googleusercontent.com/d/14ZIIXuUdQgNJFraWEuSKYuK0Zpjqxv7Q' },
+                    { name: 'ไหมพรม', url: 'https://lh3.googleusercontent.com/d/1DB5s5Yb-dIZkQjWsNkyhzTFfdbr2tvqZ' },
+                    { name: 'ลูกบอล', url: 'https://lh3.googleusercontent.com/d/1AdMvBtC0qxKBxsyuj9uo94APa7CWgKcq' },
+                    { name: 'เหรียญ', url: 'https://lh3.googleusercontent.com/d/16G8TP6p9y_bYAtal_3if5e77GzDrbHFg' },
+                    { name: 'ท่อนไม้', url: 'https://lh3.googleusercontent.com/d/14ZIIXuUdQgNJFraWEuSKYuK0Zpjqxv7Q' }
+                ],
+                fact: "ลูกปัดหรืออัญมณีเม็ดเล็กๆ เมื่ออยู่เดี่ยวๆ อาจเป็นแค่ของตกแต่งธรรมดา แต่เมื่อนำมาร้อยเรียงประกอบเข้าด้วยกัน เราสามารถสร้างเป็นวัตถุชิ้นใหม่อย่างกำไลข้อมือที่สวยงามได้"
+            },
+            {
+                id: 3,
+                name: "ด่าน 3: สร้างรถยนต์",
+                objectiveIcon: "https://lh3.googleusercontent.com/d/1gHSSo9XX9CfCjEq2qjijJymsYWHDxire",
+                objectiveName: "รถยนต์",
+                requiredParts: 7,
+                targetIcon: "https://lh3.googleusercontent.com/d/1rmHL8nEyh9vMhLJe2U6g0zvhSsn_sXt-",
+                targetName: "ชิ้นส่วนรถยนต์",
+                targetParts: [
+                    { name: 'ล้อรถ', url: 'https://lh3.googleusercontent.com/d/1rmHL8nEyh9vMhLJe2U6g0zvhSsn_sXt-' },
+                    { name: 'เครื่องยนต์', url: 'https://lh3.googleusercontent.com/d/1jNd4wregwTGZcDCYcZTKfY_vHKjmJV-s' },
+                    { name: 'ประตู', url: 'https://lh3.googleusercontent.com/d/1xOcxqAcRzNsZruWxFw96npAv5DgtFAMv' },
+                    { name: 'เบาะนั่ง', url: 'https://lh3.googleusercontent.com/d/13TSsJPDlnd9GSEpbpTvwVH7RZX_ceEqC' },
+                    { name: 'ไฟหน้า', url: 'https://lh3.googleusercontent.com/d/12pPGDxflVBvdn6aAyoMBvezW3AgCCNnh' },
+                    { name: 'แบตเตอรี่รถ', url: 'https://lh3.googleusercontent.com/d/1ZoEQoD-cQBVnQslkRiPHPzl4NGwMfQ1K' },
+                    { name: 'น็อต', url: 'https://lh3.googleusercontent.com/d/1JlXoMjy_YNVa6R8e_8-PZ8PWea6UmttX' }
+                ],
+                dropSpeedBase: 3.2,
+                dropInterval: 950,
+                distractors: [
+                    { name: 'แมงมุม', url: 'https://lh3.googleusercontent.com/d/1pHjpeKYOsAqo4USZRI8p0D6C6V0BUVUk' },
+                    { name: 'เห็ด', url: 'https://lh3.googleusercontent.com/d/1_zAUJJO5hSTF7w5oLoAY9nDruoReYrUy' },
+                    { name: 'ไหมพรม', url: 'https://lh3.googleusercontent.com/d/1DB5s5Yb-dIZkQjWsNkyhzTFfdbr2tvqZ' },
+                    { name: 'แมงมุม', url: 'https://lh3.googleusercontent.com/d/1pHjpeKYOsAqo4USZRI8p0D6C6V0BUVUk' },
+                    { name: 'เห็ด', url: 'https://lh3.googleusercontent.com/d/1_zAUJJO5hSTF7w5oLoAY9nDruoReYrUy' },
+                    { name: 'ไหมพรม', url: 'https://lh3.googleusercontent.com/d/1DB5s5Yb-dIZkQjWsNkyhzTFfdbr2tvqZ' },
+                    { name: 'แมงมุม', url: 'https://lh3.googleusercontent.com/d/1pHjpeKYOsAqo4USZRI8p0D6C6V0BUVUk' },
+                    { name: 'เห็ด', url: 'https://lh3.googleusercontent.com/d/1_zAUJJO5hSTF7w5oLoAY9nDruoReYrUy' },
+                    { name: 'ไหมพรม', url: 'https://lh3.googleusercontent.com/d/1DB5s5Yb-dIZkQjWsNkyhzTFfdbr2tvqZ' },
+                    { name: 'แมงมุม', url: 'https://lh3.googleusercontent.com/d/1pHjpeKYOsAqo4USZRI8p0D6C6V0BUVUk' },
+                    { name: 'เห็ด', url: 'https://lh3.googleusercontent.com/d/1_zAUJJO5hSTF7w5oLoAY9nDruoReYrUy' },
+                    { name: 'ไหมพรม', url: 'https://lh3.googleusercontent.com/d/1DB5s5Yb-dIZkQjWsNkyhzTFfdbr2tvqZ' },
+                    { name: 'แมงมุม', url: 'https://lh3.googleusercontent.com/d/1pHjpeKYOsAqo4USZRI8p0D6C6V0BUVUk' },
+                    { name: 'เห็ด', url: 'https://lh3.googleusercontent.com/d/1_zAUJJO5hSTF7w5oLoAY9nDruoReYrUy' }
+                ],
+                fact: "รถยนต์เป็นตัวอย่างที่ดีของวัตถุที่ประกอบจากชิ้นส่วนย่อยๆ นับพันชิ้น ตั้งแต่ล้อ เครื่องยนต์ ไปจนถึงน็อตตัวเล็กๆ เมื่อประกอบเข้าด้วยกันจึงจะกลายเป็นยานพาหนะที่สมบูรณ์"
+            }
+        ];
+
+        // Image Preloading Cache
+        const imageCache = {};
+        function preloadImages() {
+            levels.forEach(level => {
+                if (level.objectiveIcon.startsWith('http')) {
+                    const img = new Image();
+                    img.src = level.objectiveIcon;
+                    imageCache[level.objectiveIcon] = img;
+                }
+                level.targetParts.forEach(part => {
+                    if (!imageCache[part.url]) {
+                        const img = new Image();
+                        img.src = part.url;
+                        imageCache[part.url] = img;
+                    }
+                });
+                level.distractors.forEach(dis => {
+                    if (!imageCache[dis.url]) {
+                        const img = new Image();
+                        img.src = dis.url;
+                        imageCache[dis.url] = img;
+                    }
+                });
+            });
+        }
+        preloadImages();
+
+        let gameState = {
+            status: 'loading',
+            currentLevelIndex: 0,
+            score: 0,
+            combo: 1,
+            lives: 3,
+            collectedParts: 0,
+            timeLeft: 50,
+            items: [],
+            particles: [],
+            mouthPosition: { x: -100, y: -100, isOpen: false },
+            lastTime: 0,
+            dropTimer: 0,
+            isFaceDetected: false,
+            fallbackPointer: { x: -100, y: -100, isDown: false }
+        };
+
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const videoElement = document.getElementById('video-element');
+        const uiHUD = document.getElementById('hud');
+        const uiFPS = document.getElementById('fps-counter');
+        const screens = {
+            loading: document.getElementById('loading-screen'),
+            start: document.getElementById('start-screen'),
+            assemble: document.getElementById('assemble-screen'),
+            end: document.getElementById('end-screen')
+        };
+        const feedbackEl = document.getElementById('feedback-text');
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        function switchScreen(screenName) {
+            Object.values(screens).forEach(s => s.classList.add('hidden'));
+            if (screenName !== 'playing') {
+                screens[screenName].classList.remove('hidden');
+            }
+            if (screenName === 'playing') {
+                uiHUD.classList.remove('hidden');
+                uiFPS.classList.remove('hidden');
+            } else {
+                uiHUD.classList.add('hidden');
+                uiFPS.classList.add('hidden');
+            }
+        }
+
+        function showFeedback(text, colorClass) {
+            feedbackEl.textContent = text;
+            feedbackEl.className = `absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-4xl sm:text-6xl font-black ${colorClass} pointer-events-none opacity-100 drop-shadow-[0_0_15px_rgba(0,0,0,0.8)] z-30 animate-pulse`;
+            setTimeout(() => {
+                feedbackEl.classList.remove('opacity-100');
+                feedbackEl.classList.add('opacity-0', 'transition-opacity', 'duration-500');
+            }, 500);
+        }
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.vx = (Math.random() - 0.5) * 10;
+                this.vy = (Math.random() - 0.5) * 10;
+                this.life = 1;
+                this.decay = Math.random() * 0.02 + 0.02;
+                this.color = color;
+                this.size = Math.random() * 5 + 3;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.life -= this.decay;
+            }
+            draw(ctx) {
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            }
+        }
+
+        function createParticles(x, y, count, color) {
+            for (let i = 0; i < count; i++) {
+                gameState.particles.push(new Particle(x, y, color));
+            }
+        }
+
+        class Item {
+            constructor(levelData) {
+                this.x = Math.random() * (canvas.width - 200) + 100;
+                this.y = -100;
+                
+                // Balanced 50% chance for target component or distractor
+                this.isTarget = Math.random() < 0.5;
+                
+                let selectedObj;
+                if (this.isTarget) {
+                    const r = Math.floor(Math.random() * levelData.targetParts.length);
+                    selectedObj = levelData.targetParts[r];
+                } else {
+                    const r = Math.floor(Math.random() * levelData.distractors.length);
+                    selectedObj = levelData.distractors[r];
+                }
+                
+                this.name = selectedObj.name;
+                this.url = selectedObj.url;
+                this.imageObj = imageCache[this.url] || (() => {
+                    const img = new Image();
+                    img.src = this.url;
+                    imageCache[this.url] = img;
+                    return img;
+                })();
+
+                this.speed = levelData.dropSpeedBase + Math.random() * 1.5;
+                // Balanced reduced size with 2x scale adjustment
+                this.size = Math.min(canvas.width, canvas.height) * 0.13;
+                this.active = true;
+                this.rotation = 0;
+                this.rotationSpeed = (Math.random() - 0.5) * 0.015;
+
+                // Multi-colored glowing frame options for visual diversity
+                const frameColors = [
+                    { stroke: '#38bdf8', glow: 'rgba(56,189,248,0.8)' },   // Cyan
+                    { stroke: '#c084fc', glow: 'rgba(192,132,252,0.8)' }, // Purple
+                    { stroke: '#ec4899', glow: 'rgba(236,72,153,0.8)' },  // Pink
+                    { stroke: '#facc15', glow: 'rgba(250,204,21,0.8)' },   // Yellow
+                    { stroke: '#4ade80', glow: 'rgba(74,222,128,0.8)' }    // Green
+                ];
+                this.frameColor = this.isTarget 
+                    ? frameColors[Math.floor(Math.random() * frameColors.length)]
+                    : { stroke: '#ef4444', glow: 'rgba(239,68,68,0.8)' }; // Red for distractors
+            }
+
+            update() {
+                this.y += this.speed;
+                this.rotation += this.rotationSpeed;
+                if (this.y > canvas.height + 100) {
+                    this.active = false;
+                }
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                
+                const halfSize = this.size / 2;
+                const radius = halfSize + 10;
+
+                // Draw gorgeous multi-colored glowing frame circle
+                ctx.beginPath();
+                ctx.arc(0, -5, radius, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+                ctx.fill();
+                
+                ctx.lineWidth = 4;
+                ctx.strokeStyle = this.frameColor.stroke;
+                ctx.shadowColor = this.frameColor.stroke;
+                ctx.shadowBlur = 20;
+                ctx.stroke();
+                ctx.shadowBlur = 0;
+
+                // Draw item image inside the frame
+                if (this.imageObj && this.imageObj.complete && this.imageObj.naturalWidth !== 0) {
+                    ctx.drawImage(this.imageObj, -halfSize, -halfSize - 5, this.size, this.size);
+                } else {
+                    ctx.fillStyle = this.frameColor.stroke;
+                    ctx.beginPath();
+                    ctx.arc(0, -5, halfSize, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                
+                // Draw text label unmirrored
+                ctx.save();
+                ctx.rotate(-this.rotation); // Counter rotate text so it's always upright and readable
+                ctx.font = "bold 15px Kanit";
+                ctx.fillStyle = this.isTarget ? "#f3f4f6" : "#fca5a5";
+                ctx.strokeStyle = "rgba(0, 0, 0, 0.9)";
+                ctx.lineWidth = 3;
+                ctx.textAlign = "center";
+                ctx.strokeText(this.name, 0, halfSize + 24);
+                ctx.fillText(this.name, 0, halfSize + 24);
+                ctx.restore();
+                
+                ctx.restore();
+            }
+        }
+
+        let isMuted = false;
+        let bgmPart = null;
+        let audioInitialized = false;
+        let sfxBite, sfxCorrect, sfxWrong, sfxClick;
+        let previousActionState = false;
+
+        async function initAudio() {
+            if (audioInitialized) return;
+            await Tone.start();
+            
+            const synth = new Tone.PolySynth(Tone.Synth, {
+                oscillator: { type: "triangle" },
+                envelope: { attack: 0.1, decay: 0.2, sustain: 0.5, release: 1 }
+            }).toDestination();
+            synth.volume.value = -16;
+
+            const chords = [
+                {"time": 0, "note": ["C4", "E4", "G4"]},
+                {"time": "1m", "note": ["F4", "A4", "C5"]},
+                {"time": "2m", "note": ["G4", "B4", "D5"]},
+                {"time": "3m", "note": ["C4", "E4", "G4"]}
+            ];
+
+            bgmPart = new Tone.Part((time, value) => {
+                synth.triggerAttackRelease(value.note, "4n", time);
+            }, chords).start(0);
+            
+            bgmPart.loop = true;
+            bgmPart.loopEnd = "4m";
+            Tone.Transport.bpm.value = 95;
+            
+            sfxBite = new Tone.Synth({
+                oscillator: { type: "square" },
+                envelope: { attack: 0.01, decay: 0.1, sustain: 0, release: 0.1 }
+            }).toDestination();
+            sfxBite.volume.value = -14;
+
+            sfxCorrect = new Tone.PolySynth(Tone.Synth, {
+                oscillator: { type: "sine" },
+                envelope: { attack: 0.05, decay: 0.1, sustain: 0.2, release: 0.5 }
+            }).toDestination();
+            sfxCorrect.volume.value = -10;
+
+            sfxWrong = new Tone.MembraneSynth({
+                pitchDecay: 0.05,
+                octaves: 4,
+                oscillator: { type: "square" },
+                envelope: { attack: 0.01, decay: 0.2, sustain: 0, release: 0.1 }
+            }).toDestination();
+            sfxWrong.volume.value = -10;
+
+            sfxClick = new Tone.Synth({
+                oscillator: { type: "triangle" },
+                envelope: { attack: 0.01, decay: 0.1, sustain: 0, release: 0.1 }
+            }).toDestination();
+            sfxClick.volume.value = -10;
+
+            audioInitialized = true;
+        }
+
+        function playBiteSound() { if (!isMuted && audioInitialized && sfxBite) sfxBite.triggerAttackRelease("C5", "16n"); }
+        function playCorrectSound() { if (!isMuted && audioInitialized && sfxCorrect) sfxCorrect.triggerAttackRelease(["C5", "E5", "G5"], "8n"); }
+        function playWrongSound() { 
+            if (!isMuted && audioInitialized && sfxWrong) {
+                try {
+                    sfxWrong.triggerAttackRelease("G2", "8n");
+                } catch (e) {
+                    console.warn("SFX audio overlap safely caught", e);
+                }
+            } 
+        }
+        function playClickSound() { if (!isMuted && audioInitialized && sfxClick) sfxClick.triggerAttackRelease("G5", "32n"); }
+
+        function toggleSound() {
+            isMuted = !isMuted;
+            document.getElementById('btn-sound-toggle').innerText = isMuted ? '🔇' : '🔊';
+            if (isMuted) {
+                Tone.Transport.pause();
+                if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+            } else {
+                if (gameState.status === 'playing') Tone.Transport.start();
+            }
+        }
+        document.getElementById('btn-sound-toggle').addEventListener('click', toggleSound);
+
+        function playBGM() { if (!isMuted && audioInitialized) Tone.Transport.start(); }
+        function stopBGM() { if (audioInitialized) Tone.Transport.pause(); }
+
+        function speakFact(text) {
+            if (isMuted || !('speechSynthesis' in window)) return;
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'th-TH';
+            utterance.rate = 0.9;
+            utterance.pitch = 1.1;
+            window.speechSynthesis.speak(utterance);
+        }
+
+        function updateHUD() {
+            const level = levels[gameState.currentLevelIndex];
+            document.getElementById('hud-level-num').innerText = level.id;
+            document.getElementById('hud-goal-text').innerText = `สร้าง: ${level.objectiveName}`;
+            
+            const levelIconContainer = document.getElementById('hud-level-icon');
+            levelIconContainer.innerHTML = '';
+            if (level.objectiveIcon.startsWith('http')) {
+                const img = document.createElement('img');
+                img.src = level.objectiveIcon;
+                img.className = "w-8 h-8 object-contain";
+                levelIconContainer.appendChild(img);
+            } else {
+                levelIconContainer.innerText = level.objectiveIcon;
+            }
+            
+            const timerEl = document.getElementById('hud-timer');
+            if (timerEl) timerEl.innerText = `⏱️ ${Math.ceil(gameState.timeLeft)}s`;
+
+            const dotsContainer = document.getElementById('hud-progress-dots');
+            dotsContainer.innerHTML = '';
+            for (let i = 0; i < level.requiredParts; i++) {
+                const dot = document.createElement('div');
+                dot.className = `w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${i < gameState.collectedParts ? 'bg-sky-500 shadow-[0_0_10px_#38bdf8] text-white border border-white' : 'bg-white/20'}`;
+                if (i < gameState.collectedParts) {
+                    const img = document.createElement('img');
+                    img.src = level.targetIcon;
+                    img.className = "w-3.5 h-3.5 object-contain";
+                    dot.appendChild(img);
+                }
+                dotsContainer.appendChild(dot);
+            }
+
+            document.getElementById('hud-score').innerText = gameState.score;
+            document.getElementById('hud-combo').innerText = `x${gameState.combo}`;
+            
+            const livesContainer = document.getElementById('hud-lives');
+            livesContainer.innerHTML = '';
+            for (let i = 0; i < 3; i++) {
+                livesContainer.innerHTML += i < gameState.lives ? '❤️' : '💔';
+            }
+        }
+
+        function spawnItem() {
+            const level = levels[gameState.currentLevelIndex];
+            gameState.items.push(new Item(level));
+        }
+
+        function checkCollisions() {
+            let targetX, targetY, isActionTriggered;
+            
+            if (gameState.isFaceDetected && gameState.mouthPosition.x !== -100) {
+                targetX = gameState.mouthPosition.x;
+                targetY = gameState.mouthPosition.y;
+                isActionTriggered = gameState.mouthPosition.isOpen;
+            } else {
+                targetX = gameState.fallbackPointer.x;
+                targetY = gameState.fallbackPointer.y;
+                isActionTriggered = gameState.fallbackPointer.isDown;
+            }
+
+            const catchRadius = canvas.width * 0.08; 
+            if (!isActionTriggered) return;
+
+            for (let i = gameState.items.length - 1; i >= 0; i--) {
+                const item = gameState.items[i];
+                if (!item.active) continue;
+
+                const dx = item.x - targetX;
+                const dy = item.y - targetY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < catchRadius + item.size / 2) {
+                    item.active = false;
+                    
+                    if (item.isTarget) {
+                        playCorrectSound();
+                        gameState.collectedParts++;
+                        gameState.score += 100 * gameState.combo;
+                        gameState.combo++;
+                        createParticles(item.x, item.y, 20, '#38bdf8');
+                        showFeedback("+100", "text-green-400");
+                        
+                        if (gameState.collectedParts >= levels[gameState.currentLevelIndex].requiredParts) {
+                            levelComplete();
+                        }
+                    } else {
+                        playWrongSound();
+                        gameState.lives--;
+                        gameState.combo = 1;
+                        gameState.score = Math.max(0, gameState.score - 50);
+                        createParticles(item.x, item.y, 15, '#ef4444');
+                        showFeedback("ผิด!", "text-red-500");
+                        
+                        if (gameState.lives <= 0) {
+                            gameOver(false, "พลังชีวิตหมด!");
+                        }
+                    }
+                    updateHUD();
+                }
+            }
+        }
+
+        function levelComplete() {
+            gameState.status = 'assemble';
+            const level = levels[gameState.currentLevelIndex];
+            stopBGM();
+            
+            const objContainer = document.getElementById('assembled-object-icon');
+            objContainer.innerHTML = '';
+            if (level.objectiveIcon.startsWith('http')) {
+                const img = document.createElement('img');
+                img.src = level.objectiveIcon;
+                img.className = "w-32 h-32 sm:w-40 sm:h-40 object-contain mx-auto animate-assemble";
+                objContainer.appendChild(img);
+            } else {
+                objContainer.innerText = level.objectiveIcon;
+            }
+
+            document.getElementById('assembled-object-name').innerText = `สร้าง ${level.objectiveName} สำเร็จ!`;
+            document.getElementById('assembled-fact-text').innerText = level.fact;
+            
+            setTimeout(() => { speakFact(level.fact); }, 500);
+            switchScreen('assemble');
+            
+            for (let i = 0; i < 5; i++) {
+                setTimeout(() => {
+                    createParticles(
+                        Math.random() * canvas.width, 
+                        Math.random() * canvas.height * 0.5, 
+                        50, 
+                        ['#38bdf8', '#c084fc', '#fcd34d'][Math.floor(Math.random() * 3)]
+                    );
+                }, i * 300);
+            }
+        }
+
+        function gameOver(isWin, reason = "") {
+            gameState.status = 'end';
+            stopBGM();
+            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+            
+            switchScreen('end');
+            
+            const titleEl = document.getElementById('end-title');
+            const subEl = document.getElementById('end-subtitle');
+            const iconEl = document.getElementById('end-icon');
+            
+            document.getElementById('end-score').innerText = gameState.score;
+            
+            let rank = 'C';
+            if (gameState.score > 2000) rank = 'S';
+            else if (gameState.score > 1000) rank = 'A';
+            else if (gameState.score > 500) rank = 'B';
+            
+            const rankEl = document.getElementById('end-rank');
+            rankEl.innerText = rank;
+            if (rank === 'S') rankEl.className = "text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 to-yellow-600 animate-pulse";
+            else rankEl.className = "text-3xl font-extrabold text-sky-400";
+
+            if (isWin) {
+                titleEl.innerText = "ภารกิจสำเร็จ!";
+                titleEl.className = "text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-blue-500 mb-2";
+                subEl.innerText = "คุณประกอบวัตถุได้ครบทุกชิ้นแล้ว ยอดเยี่ยมมาก!";
+                iconEl.innerText = "🏆";
+            } else {
+                titleEl.innerText = "เกมโอเวอร์";
+                titleEl.className = "text-3xl font-extrabold text-red-400 mb-2";
+                subEl.innerText = reason !== "" ? reason : "ระวังอย่าเก็บสิ่งที่ไม่ใช่ส่วนประกอบนะ!";
+                iconEl.innerText = "😵";
+            }
+        }
+
+        function nextLevel() {
+            playClickSound();
+            gameState.currentLevelIndex++;
+            if (gameState.currentLevelIndex >= levels.length) {
+                gameOver(true);
+            } else {
+                startLevel();
+            }
+        }
+
+        function startLevel() {
+            gameState.status = 'playing';
+            gameState.collectedParts = 0;
+            gameState.timeLeft = 50;
+            gameState.items = [];
+            gameState.particles = [];
+            gameState.dropTimer = 0;
+            
+            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+            playBGM();
+            updateHUD();
+            switchScreen('playing');
+        }
+
+        async function startGame() {
+            await initAudio();
+            playClickSound();
+            gameState.currentLevelIndex = 0;
+            gameState.score = 0;
+            gameState.combo = 1;
+            gameState.lives = 3;
+            gameState.items = [];
+            gameState.particles = [];
+            gameState.lastTime = performance.now();
+            startLevel();
+        }
+
+        const faceMesh = new FaceMesh({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+        }});
+        
+        faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        function getMappedCoords(normX, normY) {
+            if (!videoElement.videoWidth || !videoElement.videoHeight) {
+                return { x: -100, y: -100 };
+            }
+            
+            const videoRatio = videoElement.videoWidth / videoElement.videoHeight;
+            const canvasRatio = canvas.width / canvas.height;
+            
+            let renderWidth, renderHeight, offsetX, offsetY;
+            if (canvasRatio > videoRatio) {
+                renderWidth = canvas.width;
+                renderHeight = canvas.width / videoRatio;
+                offsetX = 0;
+                offsetY = (canvas.height - renderHeight) / 2;
+            } else {
+                renderWidth = canvas.height * videoRatio;
+                renderHeight = canvas.height;
+                offsetX = (canvas.width - renderWidth) / 2;
+                offsetY = 0;
+            }
+            
+            // Since the video element uses transform: scaleX(-1) (mirrored preview),
+            // we invert normX (1.0 - normX) so the tracking circle moves in the exact same direction as the user's mouth on screen.
+            const correctedNormX = 1.0 - normX;
+            
+            return {
+                x: offsetX + (correctedNormX * renderWidth),
+                y: offsetY + (normY * renderHeight)
+            };
+        }
+
+        faceMesh.onResults((results) => {
+            gameState.isFaceDetected = false;
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                gameState.isFaceDetected = true;
+                const landmarks = results.multiFaceLandmarks[0];
+                
+                const upperLip = landmarks[13]; 
+                const lowerLip = landmarks[14];
+                const mouthLeft = landmarks[78];
+                const mouthRight = landmarks[308];
+
+                const centerNormX = (upperLip.x + lowerLip.x) / 2;
+                const centerNormY = (upperLip.y + lowerLip.y) / 2;
+                const mappedCenter = getMappedCoords(centerNormX, centerNormY);
+                
+                if (gameState.mouthPosition.x === -100) {
+                    gameState.mouthPosition.x = mappedCenter.x;
+                    gameState.mouthPosition.y = mappedCenter.y;
+                } else {
+                    gameState.mouthPosition.x += (mappedCenter.x - gameState.mouthPosition.x) * 0.5;
+                    gameState.mouthPosition.y += (mappedCenter.y - gameState.mouthPosition.y) * 0.5;
+                }
+
+                const mouthWidth = Math.sqrt(Math.pow(mouthRight.x - mouthLeft.x, 2) + Math.pow(mouthRight.y - mouthLeft.y, 2));
+                const mouthHeight = Math.sqrt(Math.pow(lowerLip.x - upperLip.x, 2) + Math.pow(lowerLip.y - upperLip.y, 2));
+                
+                const openRatio = mouthHeight / mouthWidth;
+                gameState.mouthPosition.isOpen = openRatio > 0.22;
+                
+                gameState.faceLandmarks = {
+                    upper: getMappedCoords(upperLip.x, upperLip.y),
+                    lower: getMappedCoords(lowerLip.x, lowerLip.y),
+                    left: getMappedCoords(mouthLeft.x, mouthLeft.y),
+                    right: getMappedCoords(mouthRight.x, mouthRight.y)
+                };
+            }
+        });
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                try {
+                    await faceMesh.send({image: videoElement});
+                } catch (e) {
+                    console.warn("FaceMesh Error: ", e);
+                }
+            },
+            width: 1280,
+            height: 720
+        });
+
+        async function startARSystem() {
+            try {
+                await faceMesh.initialize();
+                await camera.start();
+                switchScreen('start');
+            } catch (err) {
+                console.warn("Camera fallback active:", err);
+                switchScreen('start');
+            }
+        }
+        startARSystem();
+
+        // Mouse & Touch Fallbacks
+        function handleInputStart(e) {
+            e.preventDefault();
+            if (gameState.status !== 'playing') return;
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const rect = canvas.getBoundingClientRect();
+            gameState.fallbackPointer.x = clientX - rect.left;
+            gameState.fallbackPointer.y = clientY - rect.top;
+            gameState.fallbackPointer.isDown = true;
+        }
+
+        function handleInputMove(e) {
+            e.preventDefault();
+            if (!gameState.fallbackPointer.isDown) return;
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const rect = canvas.getBoundingClientRect();
+            gameState.fallbackPointer.x = clientX - rect.left;
+            gameState.fallbackPointer.y = clientY - rect.top;
+        }
+
+        function handleInputEnd(e) {
+            e.preventDefault();
+            gameState.fallbackPointer.isDown = false;
+        }
+
+        canvas.addEventListener('mousedown', handleInputStart);
+        canvas.addEventListener('mousemove', handleInputMove);
+        window.addEventListener('mouseup', handleInputEnd);
+        canvas.addEventListener('touchstart', handleInputStart, {passive: false});
+        canvas.addEventListener('touchmove', handleInputMove, {passive: false});
+        window.addEventListener('touchend', handleInputEnd);
+
+        document.getElementById('btn-start').addEventListener('click', startGame);
+        document.getElementById('btn-next-level').addEventListener('click', nextLevel);
+        document.getElementById('btn-restart').addEventListener('click', startGame);
+
+        let frames = 0;
+        let lastFpsTime = 0;
+
+        function drawLoop(timestamp) {
+            const deltaTime = timestamp - gameState.lastTime;
+            gameState.lastTime = timestamp;
+
+            frames++;
+            if (timestamp - lastFpsTime >= 1000) {
+                document.querySelector('#fps-counter span').innerText = frames;
+                frames = 0;
+                lastFpsTime = timestamp;
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (gameState.status === 'playing') {
+                gameState.timeLeft -= deltaTime / 1000;
+                
+                const timerEl = document.getElementById('hud-timer');
+                if (timerEl) {
+                    const displayTime = Math.max(0, Math.ceil(gameState.timeLeft));
+                    timerEl.innerText = `⏱️ ${displayTime}s`;
+                    if (gameState.timeLeft <= 10) {
+                        timerEl.classList.add('bg-red-600', 'animate-pulse');
+                        timerEl.classList.remove('bg-red-500/90');
+                    } else {
+                        timerEl.classList.remove('bg-red-600', 'animate-pulse');
+                        timerEl.classList.add('bg-red-500/90');
+                    }
+                }
+
+                if (gameState.timeLeft <= 0) {
+                    gameOver(false, "หมดเวลา! คุณรวบรวมชิ้นส่วนไม่ทัน");
+                    requestAnimationFrame(drawLoop);
+                    return;
+                }
+
+                const level = levels[gameState.currentLevelIndex];
+                gameState.dropTimer += deltaTime;
+                if (gameState.dropTimer > level.dropInterval || gameState.items.length === 0) {
+                    spawnItem();
+                    gameState.dropTimer = 0;
+                }
+
+                for (let i = gameState.items.length - 1; i >= 0; i--) {
+                    const item = gameState.items[i];
+                    item.update();
+                    item.draw(ctx);
+                    if (!item.active) {
+                        gameState.items.splice(i, 1);
+                    }
+                }
+
+                for (let i = gameState.particles.length - 1; i >= 0; i--) {
+                    const p = gameState.particles[i];
+                    p.update();
+                    p.draw(ctx);
+                    if (p.life <= 0) {
+                        gameState.particles.splice(i, 1);
+                    }
+                }
+
+                checkCollisions();
+
+                let currentActionState = false;
+                if (gameState.isFaceDetected && gameState.mouthPosition.x !== -100) {
+                    currentActionState = gameState.mouthPosition.isOpen;
+                } else if (gameState.fallbackPointer.isDown) {
+                    currentActionState = true;
+                }
+
+                if (currentActionState && !previousActionState) {
+                    playBiteSound(); 
+                }
+                previousActionState = currentActionState;
+
+                drawTrackingVisuals();
+            } else if (gameState.status === 'assemble') {
+                for (let i = gameState.particles.length - 1; i >= 0; i--) {
+                    const p = gameState.particles[i];
+                    p.update();
+                    p.draw(ctx);
+                    if (p.life <= 0) gameState.particles.splice(i, 1);
+                }
+            }
+
+            requestAnimationFrame(drawLoop);
+        }
+
+        function drawTrackingVisuals() {
+            ctx.save();
+            let targetX, targetY, isActionTriggered;
+            
+            if (gameState.isFaceDetected && gameState.mouthPosition.x !== -100) {
+                targetX = gameState.mouthPosition.x;
+                targetY = gameState.mouthPosition.y;
+                isActionTriggered = gameState.mouthPosition.isOpen;
+
+                if (gameState.faceLandmarks) {
+                    ctx.fillStyle = isActionTriggered ? '#4ade80' : '#38bdf8';
+                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = ctx.fillStyle;
+                    const p = gameState.faceLandmarks;
+                    const r = 3;
+                    ctx.beginPath(); ctx.arc(p.upper.x, p.upper.y, r, 0, 2*Math.PI); ctx.fill();
+                    ctx.beginPath(); ctx.arc(p.lower.x, p.lower.y, r, 0, 2*Math.PI); ctx.fill();
+                    ctx.beginPath(); ctx.arc(p.left.x, p.left.y, r, 0, 2*Math.PI); ctx.fill();
+                    ctx.beginPath(); ctx.arc(p.right.x, p.right.y, r, 0, 2*Math.PI); ctx.fill();
+                }
+            } else {
+                if (gameState.fallbackPointer.x !== -100) {
+                    targetX = gameState.fallbackPointer.x;
+                    targetY = gameState.fallbackPointer.y;
+                    isActionTriggered = gameState.fallbackPointer.isDown;
+                } else {
+                    ctx.restore();
+                    return;
+                }
+            }
+
+            const ringRadius = canvas.width * 0.08;
+            ctx.beginPath();
+            ctx.arc(targetX, targetY, ringRadius, 0, 2 * Math.PI);
+            
+            if (isActionTriggered) {
+                ctx.strokeStyle = '#4ade80';
+                ctx.lineWidth = 4;
+                ctx.setLineDash([10, 10]);
+                ctx.shadowColor = '#4ade80';
+                ctx.shadowBlur = 15;
+                ctx.stroke();
+                
+                const innerRadius = Math.max(0, ringRadius * 0.5 + Math.sin(Date.now() * 0.01) * 5);
+                ctx.beginPath();
+                ctx.arc(targetX, targetY, innerRadius, 0, 2 * Math.PI);
+                ctx.fillStyle = 'rgba(74, 222, 128, 0.25)';
+                ctx.fill();
+
+                ctx.font = "bold 20px Kanit";
+                ctx.fillStyle = "#4ade80";
+                ctx.textAlign = "center";
+                ctx.fillText("งับ!", targetX, targetY - ringRadius - 20);
+            } else {
+                ctx.strokeStyle = 'rgba(56, 189, 248, 0.6)';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([]);
+                ctx.shadowBlur = 0;
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        requestAnimationFrame(drawLoop);
+    </script>
+</body>
+</html>
